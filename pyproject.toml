@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "frco"
+version = "0.1.0"
+description = "CLI minimal pour l'API Recherche d'entreprises"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "requests>=2.32,<3",
+    "typer>=0.12,<1",
+]
+
+[project.scripts]
+frco = "frco.cli.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/frco"]
