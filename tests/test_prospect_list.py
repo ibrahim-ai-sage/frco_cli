@@ -1,6 +1,7 @@
 """Tests ciblés de l'expansion NAF, de la pagination et de l'export GTM."""
 
 import csv
+from contextlib import chdir
 import json
 from pathlib import Path
 import tempfile
@@ -184,6 +185,66 @@ class ProspectListTests(unittest.TestCase):
             self.assertEqual(result.stdout, "")
             self.assertIn("10 000", result.stderr)
             self.assertFalse(path.exists())
+
+    def test_default_output_is_json(self) -> None:
+        """Sans --output, un tableau JSON est écrit dans prospects.json."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as directory, chdir(directory):
+            client = FakeClient([company_record(1, nom_complet="SOCIÉTÉ ÉTÉ")])
+            with patch("frco.cli.prospect_list.ApiGouvClient", return_value=client):
+                result = runner.invoke(app, ["list", "62.02A"])
+            self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertEqual(result.stderr, "")
+            content = Path("prospects.json").read_text(encoding="utf-8")
+            self.assertEqual(json.loads(content), json.loads(result.stdout))
+            self.assertEqual(json.loads(content)[0]["name"], "SOCIÉTÉ ÉTÉ")
+            self.assertFalse(Path("prospects.csv").exists())
+
+    def test_explicit_json_output_can_be_empty(self) -> None:
+        """Une recherche vide réussie écrit [] au chemin JSON demandé."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "comptes.json"
+            with patch("frco.cli.prospect_list.ApiGouvClient", return_value=FakeClient([])):
+                result = CliRunner().invoke(app, ["list", "62.02A", "-o", str(path)])
+            self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), [])
+            self.assertEqual(json.loads(result.stdout), [])
+
+    def test_failed_default_search_preserves_existing_json(self) -> None:
+        """Un échec de collecte ne remplace pas un ancien export par défaut."""
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as directory, chdir(directory):
+            path = Path("prospects.json")
+            path.write_text('[{"previous": true}]', encoding="utf-8")
+            client = FakeClient([], reported_total=10000)
+            with patch("frco.cli.prospect_list.ApiGouvClient", return_value=client):
+                result = runner.invoke(app, ["list", "62.02A"])
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), [{"previous": True}])
+
+    def test_json_write_failure_preserves_existing_file(self) -> None:
+        """Un remplacement impossible conserve le fichier et nettoie le temporaire."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "comptes.json"
+            path.write_text("[]", encoding="utf-8")
+            with patch("frco.cli.prospect_list.ApiGouvClient", return_value=FakeClient([company_record(1)])):
+                with patch("frco.formatters.json_formatter.os.replace", side_effect=OSError("écriture impossible")):
+                    result = CliRunner().invoke(app, ["list", "62.02A", "-o", str(path)])
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("écriture impossible", result.stderr)
+            self.assertEqual(path.read_text(encoding="utf-8"), "[]")
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_invalid_output_extension_does_not_call_api(self) -> None:
+        """Le format de sortie est validé avant tout appel réseau."""
+        with patch("frco.cli.prospect_list.ApiGouvClient") as client:
+            result = CliRunner().invoke(app, ["list", "62.02A", "-o", "comptes.txt"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn(".json ou .csv", result.stderr)
+        client.assert_not_called()
 
     def test_csv_preserves_missing_objects_and_empty_arrays(self) -> None:
         """Les valeurs inconnues restent null et les tableaux absents restent []."""

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "segments": [
+    {"id": "conseil-informatique", "naf": "62.02A"},
+    {"id": "tierce-maintenance", "naf": "62.02B"}
+  ]
+}

@@ -24,39 +24,11 @@ L'argument est transmis tel quel dans `q`. La commande affiche le premier
 résultat en JSON sur stdout. Les erreurs réseau, HTTP, de réponse ou l'absence
 de résultat sont signalées sur stderr avec un code de sortie non nul.
 
-## Recherche simple
-
-```sh
-uv run frco search "Microsoft France"
-uv run frco search 327733184 --page 2 --per-page 25
-uv run frco search "conseil" --exclude ETI
-uv run frco search "conseil" --exclude categorie_entreprise=PME
-uv run frco search "Microsoft France" --exclude-field dirigeants --exclude-field siege.adresse
-```
-
-`search` transmet la requête telle quelle dans `q` et affiche la réponse JSON
-de l'API sur stdout, avec les résultats et les métadonnées de pagination.
-La commande demande 10 résultats par page par défaut. `--per-page` accepte de 1
-à 25 résultats. Une recherche sans résultat renvoie une liste `results` vide.
-Les erreurs sont affichées sur stderr avec un code de sortie non nul.
-`--exclude` retire des entreprises **après** l'appel API. `--exclude ETI`
-retire celles dont `categorie_entreprise` vaut `ETI` ; la syntaxe
-`--exclude champ=valeur` accepte d'autres champs et peut être répétée. Plusieurs
-exclusions sont combinées avec « ou ». La recherche reste paginée par l'API :
-`total_results` et `total_pages` décrivent les résultats **avant** exclusion,
-et `excluded_results_on_page` indique combien ont été retirés de la page reçue.
-La commande ne recharge pas la page pour compenser les exclusions.
-
-`--exclude-field` retire un champ du JSON affiché, sans retirer l'entreprise.
-L'option peut être répétée. Les chemins sont relatifs à chaque entreprise de
-`results` ; par exemple, `siege.adresse` retire l'adresse du siège et
-`dirigeants.nom` retire le nom de chaque dirigeant. Toutes les exclusions sont
-appliquées localement après la réponse de l'API ; aucun critère d'exclusion
-n'est ajouté à la requête.
-
 ## Listes de prospection
 
 ```sh
+uv run frco list 62.02A --department 75 --active-only
+uv run frco list 62.02A --department 75 -o comptes.json
 uv run frco list 62.02A --department 75 --active-only --output prospects.csv
 uv run frco list 62.02 --region 11 --employees-min 20 --revenue-min 1000000 --multi-site-only -o comptes.csv
 uv run frco list 69.20 --city Paris --revenue-min 10000000 --establishments-min 2 -o paris.csv
@@ -70,8 +42,13 @@ La classe `62.02` donne `62.02A` et `62.02B`. La classe
 [69.20](https://www.insee.fr/fr/metadonnees/nafr2/classe/69.20) donne seulement
 `69.20Z` dans cette nomenclature : `69.20A` n'y existe pas.
 
-La commande lit toutes les pages annoncées par l'API, exporte un CSV UTF-8
-dans `--output`, puis écrit un tableau JSON sur stdout. Chaque objet du tableau
+La commande lit toutes les pages annoncées par l'API et crée par défaut
+`prospects.json` dans le dossier courant, en UTF-8. `--output` (`-o`) est
+facultatif : une extension `.json` choisit le JSON et `.csv` le CSV ; toute
+autre extension est refusée avant l'appel API. Un fichier de même nom est
+remplacé après une collecte et une écriture réussies.
+
+Le tableau JSON reste également écrit sur stdout. Chaque objet du tableau
 utilise exactement le schéma de `frco company`; `searched_establishment` est
 `null`, car une liste ne recherche pas un SIRET précis. Le CSV contient une
 ligne par SIREN. Il conserve les champs racine de cette même fiche et ajoute
@@ -123,9 +100,60 @@ exclue. Les seuils de CA portent sur le dernier exercice disponible.
 
 L'API plafonne certaines recherches larges à 10 000 résultats. Si ce plafond
 est atteint, ou si les pages sont incohérentes, la commande échoue avec un
-diagnostic sur stderr et n'écrit aucun CSV partiel. Ajoutez des critères pour
-réduire la recherche. Les [paramètres et limites de l'API](https://recherche-entreprises.api.gouv.fr/docs/)
+diagnostic sur stderr et n'écrit aucun export partiel. Décomposez la recherche
+avec un plan de segments pour conserver le périmètre, plutôt que d'ajouter des
+seuils qui pourraient exclure des entreprises. Les [paramètres et limites de l'API](https://recherche-entreprises.api.gouv.fr/docs/)
 font autorité pour la recherche.
+
+### Collecter plus de 10 000 entreprises avec un plan
+
+`--segments` permet à une skill ou à l'utilisateur de définir les sous-recherches,
+puis au CLI de les collecter en un seul lancement et de réunir leurs SIREN :
+
+```sh
+uv run frco list 62.02 --department 75 --segments examples/segments-naf-62.02.json -o comptes-75.json
+```
+
+Le plan d'exemple découpe la classe `62.02` en ses deux sous-classes. Un plan
+peut aussi définir des communes par code INSEE, par exemple :
+
+```json
+{
+  "version": 1,
+  "segments": [
+    {"id": "paris15", "city": "75115"},
+    {"id": "paris16", "city": "75116"}
+  ]
+}
+```
+
+Ce second exemple couvre uniquement ces deux arrondissements, pas tout Paris.
+Les seules propriétés acceptées dans un segment sont `id`, `naf`, `region`,
+`department` et `city`. L'identifiant est obligatoire et unique. Les autres
+critères sont hérités de la commande. Un segment ne peut pas remplacer une
+contrainte géographique initiale par une autre ni sortir des NAF initiaux.
+Il peut ajouter un niveau plus fin : `--department 75` reste transmis lorsque
+le segment ajoute `city`. Les seuils d'effectif, de CA et les autres critères
+ne peuvent pas être modifiés dans le plan. Sans filtre financier demandé,
+les entreprises au CA inconnu restent incluses.
+
+Tout le plan est validé avant le premier appel API. Les segments sont ensuite
+collectés séquentiellement avec le même client et son délai entre appels.
+Chaque segment doit rester sous 10 000 résultats ; si une feuille est encore
+plafonnée, le message d'erreur l'identifie pour permettre à l'agent de la
+subdiviser. En cas d'échec, le fichier final existant est conservé.
+
+Le nombre total de SIREN uniques peut dépasser 10 000. Les doublons entre
+segments sont fusionnés en conservant la fiche entière récupérée le plus
+récemment, sans fabriquer une liste exhaustive d'établissements. Le bilan
+est écrit sur stderr ; stdout et le fichier conservent le schéma habituel.
+Les référentiels NAF sont mis en cache pendant l'exécution pour éviter de
+relire les mêmes fichiers pour chaque fiche.
+
+Le CLI valide l'exécution des segments, mais ne déduit pas leurs descendants
+et ne prouve pas que la liste fournie couvre tout le marché demandé. Cette
+vérification reste du ressort de la skill et du référentiel utilisé. Il n'y a
+pas encore de collecte parallèle ni de reprise automatique des segments réussis.
 
 L'API fournit séparément l'unité légale, son `siege` et les
 `matching_etablissements`. `headquarters.siret` est la seule référence au
@@ -308,6 +336,34 @@ Il faut remplacer `status` par `administrative_status` et `leaders` par
 
 Cette version ajoute `company_structure` aux réponses. Les scripts qui
 valident strictement les clés racine doivent accepter ce nouveau champ.
+
+## Skills pour les agents
+
+Les sources des quatre skills sont conservées dans [`skills/`](skills/). Elles
+décrivent l'interface actuelle du CLI et les règles métier à respecter :
+
+| Skill | Utilisation |
+|---|---|
+| [`frco-cli`](skills/frco-cli/SKILL.md) | Prise en main, installation et choix de commande |
+| [`frco-company`](skills/frco-company/SKILL.md) | Fiche entreprise et interprétation des données |
+| [`frco-prospect-list`](skills/frco-prospect-list/SKILL.md) | Filtres de prospection et exports CSV/JSON |
+| [`frco-plan-research`](skills/frco-plan-research/SKILL.md) | Relations entre champs, découpage et couverture |
+
+Une fois installées dans le dossier personnel de skills de l'agent, elles
+peuvent être invoquées explicitement, par exemple :
+
+```text
+Utilise $frco-company pour consulter Microsoft France.
+Utilise $frco-prospect-list pour exporter les entreprises actives du NAF 62.02 dans le 75.
+Utilise $frco-plan-research pour décomposer une recherche sur le département 75.
+```
+
+La planification privilégie un découpage géographique initial, conserve les
+critères demandés et les valeurs inconnues pertinentes, puis contrôle chaque
+segment. Le CLI exécute et fusionne les plans via `list --segments` ; le
+parallélisme et les recherches structurées sans NAF ne sont pas intégrés.
+La [cartographie des champs](docs/research-field-map.md) détaille les relations
+et les vérifications restant à établir.
 
 ## Tests
 

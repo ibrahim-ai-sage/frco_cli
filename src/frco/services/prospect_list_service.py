@@ -107,7 +107,9 @@ class ProspectListService:
         if total >= API_RESULT_CAP:
             raise ProspectListError(
                 "L'API plafonne cette recherche à 10 000 résultats. "
-                "Ajoutez des filtres géographiques, d'effectif ou de CA pour obtenir une liste complète."
+                "Décomposez le périmètre en sous-recherches couvrantes, puis fusionnez les SIREN. "
+                "Conservez les critères initiaux : ajouter un seuil d'effectif ou de CA "
+                "peut exclure des entreprises, notamment celles aux données inconnues."
             )
 
         companies: list[Company] = []

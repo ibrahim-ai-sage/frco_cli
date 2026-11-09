@@ -17,6 +17,15 @@ FIXTURE = Path(__file__).resolve().parents[1] / "examples" / "api_response_micro
 class CliTests(unittest.TestCase):
     """Vérifie que stdout reste réservé au JSON."""
 
+    def test_removed_search_command_is_rejected(self) -> None:
+        """L'ancienne commande ne déclenche plus de requête API."""
+        with patch("frco.clients.api_gouv_client.ApiGouvClient.search_companies") as api_search:
+            result = CliRunner().invoke(app, ["search", "exemple"])
+
+        self.assertEqual(result.exit_code, 2)
+        self.assertIn("No such command", result.stderr)
+        api_search.assert_not_called()
+
     def test_success_has_only_valid_json_on_stdout(self) -> None:
         """Une sortie réussie est directement exploitable par un script."""
         payload = json.loads(FIXTURE.read_text(encoding="utf-8"))

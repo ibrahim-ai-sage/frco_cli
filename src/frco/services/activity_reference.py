@@ -1,6 +1,7 @@
 """Libellés NAF rév. 2 issus des listes officielles de l'Insee."""
 
 import csv
+from functools import cache
 from importlib.resources import files
 import re
 
@@ -29,6 +30,7 @@ def section_label(code: str | None) -> str | None:
     return _label("naf_rev2_sections.csv", code)
 
 
+@cache
 def resolve_naf_codes(value: str) -> tuple[str, ...]:
     """Résout une sous-classe ou toutes les sous-classes d'une classe NAF rév. 2.
 
@@ -59,6 +61,7 @@ def resolve_naf_codes(value: str) -> tuple[str, ...]:
     return tuple(sorted(codes))
 
 
+@cache
 def _label(filename: str, code: str | None) -> str | None:
     """Cherche un code dans une référence CSV embarquée."""
     if code is None:
